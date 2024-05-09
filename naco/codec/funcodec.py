@@ -1,31 +1,50 @@
-import math
+# Warning: An import error occurs when using the current script as the main program.
+# Because the filename is the same as the package "funcodec".
 import torch
 from funcodec.bin.codec_inference import Speech2Token
 
+import math
+import typing as tp
 from pathlib import Path
 from urllib.request import urlretrieve
-import typing as tp
 
+from .utils import pad_audio
 
 # segment=null, audio_normalize=True for all models.
-FUNCODEC_MODEL_TYPE = {
+FUNCODEC_MODEL_URL = {
     # FreqCodec
-    "funcodec_en_libritts-16k-gr1nq32ds320": "https://huggingface.co/alibaba-damo/audio_codec-freqcodec_magphase-en-libritts-16k-gr1nq32ds320-pytorch",
-    "funcodec_en_libritts-16k-gr8nq32ds320": "https://huggingface.co/alibaba-damo/audio_codec-freqcodec_magphase-en-libritts-16k-gr8nq32ds320-pytorch",
+    "funcodec_en_libritts-16k-gr1nq32ds320": {
+        "ckpt": "https://huggingface.co/alibaba-damo/audio_codec-freqcodec_magphase-en-libritts-16k-gr1nq32ds320-pytorch/resolve/main/model.pth",
+        "config": "https://huggingface.co/alibaba-damo/audio_codec-freqcodec_magphase-en-libritts-16k-gr1nq32ds320-pytorch/raw/main/config.yaml",
+    },
+    "funcodec_en_libritts-16k-gr8nq32ds320": {
+        "ckpt": "https://huggingface.co/alibaba-damo/audio_codec-freqcodec_magphase-en-libritts-16k-gr8nq32ds320-pytorch/resolve/main/model.pth",
+        "config": "https://huggingface.co/alibaba-damo/audio_codec-freqcodec_magphase-en-libritts-16k-gr8nq32ds320-pytorch/raw/main/config.yaml",
+    },
     # EnCodec
-    "funcodec_en_libritts-16k-nq32ds320": "https://huggingface.co/alibaba-damo/audio_codec-encodec-en-libritts-16k-nq32ds320-pytorch",
-    "funcodec_en_libritts-16k-nq32ds640": "https://huggingface.co/alibaba-damo/audio_codec-encodec-en-libritts-16k-nq32ds640-pytorch",
-    "funcodec_zh_en_general_16k_nq32ds320": "https://huggingface.co/alibaba-damo/audio_codec-encodec-zh_en-general-16k-nq32ds320-pytorch",
-    "funcodec_zh_en_general_16k_nq32ds640": "https://huggingface.co/alibaba-damo/audio_codec-encodec-zh_en-general-16k-nq32ds640-pytorch",
+    "funcodec_en_libritts-16k-nq32ds320": {
+        "ckpt": "https://huggingface.co/alibaba-damo/audio_codec-encodec-en-libritts-16k-nq32ds320-pytorch/resolve/main/model.pth",
+        "config": "https://huggingface.co/alibaba-damo/audio_codec-encodec-en-libritts-16k-nq32ds320-pytorch/raw/main/config.yaml",
+    },
+    "funcodec_en_libritts-16k-nq32ds640": {
+        "ckpt": "https://huggingface.co/alibaba-damo/audio_codec-encodec-en-libritts-16k-nq32ds640-pytorch/resolve/main/model.pth",
+        "config": "https://huggingface.co/alibaba-damo/audio_codec-encodec-en-libritts-16k-nq32ds640-pytorch/raw/main/config.yaml",
+    },
+    "funcodec_zh_en_general_16k_nq32ds320": {
+        "ckpt": "https://huggingface.co/alibaba-damo/audio_codec-encodec-zh_en-general-16k-nq32ds320-pytorch/resolve/main/model.pth",
+        "config": "https://huggingface.co/alibaba-damo/audio_codec-encodec-zh_en-general-16k-nq32ds320-pytorch/raw/main/config.yaml",
+    },
+    "funcodec_zh_en_general_16k_nq32ds640": {
+        "ckpt": "https://huggingface.co/alibaba-damo/audio_codec-encodec-zh_en-general-16k-nq32ds640-pytorch/resolve/main/model.pth",
+        "config": "https://huggingface.co/alibaba-damo/audio_codec-encodec-zh_en-general-16k-nq32ds640-pytorch/raw/main/config.yaml",
+    },
 }
 
 
 class FunCodec:
     """
     FunCodec. https://github.com/alibaba-damo-academy/FunCodec
-    Here we provide the inference implementation of CodecSUPERB and the official repository,
-    the only difference between them is that the CodecSUPERB implementation directly sets
-    `run_mod="inference"` to achieve the normalization before and after coding.
+    Here we provide the inference implementation of the official repository.
     """
 
     def __init__(self, model_type: str, device: str = "cpu") -> None:
@@ -35,40 +54,42 @@ class FunCodec:
 
         if not (config_path.exists() and ckpt_path.exists()):
             model_path.mkdir(parents=True, exist_ok=True)
-            config_url = FUNCODEC_MODEL_TYPE[model_type] + "/raw/main/config.yaml"
-            ckpt_url = FUNCODEC_MODEL_TYPE[model_type] + "/resolve/main/model.pth"
+            config_url = FUNCODEC_MODEL_URL[model_type]["config"]
+            ckpt_url = FUNCODEC_MODEL_URL[model_type]["ckpt"]
             urlretrieve(config_url, config_path)
             urlretrieve(ckpt_url, ckpt_path)
 
         self.model = Speech2Token(config_path, ckpt_path, device=device)
-        self.support_bitrate = self.get_funcodec_bitrate()
 
-    def get_funcodec_bitrate(self) -> tp.List[float]:
-        sample_rate = self.model.model.sample_rate
-        encoder_hop_length = self.model.model_args.quantizer_conf["encoder_hop_length"]
+        self.sample_rate = self.model.model.sample_rate
+        self.hop_length = self.model.model_args.quantizer_conf["encoder_hop_length"]
+        self.support_bitrates = self.get_funcodec_bitrates()
+
+    def get_funcodec_bitrates(self) -> tp.List[float]:
         codebook_size = self.model.model_args.quantizer_conf["codebook_size"]
         num_quantizers = self.model.model_args.quantizer_conf["num_quantizers"]
         rand_num_quant = self.model.model_args.quantizer_conf["rand_num_quant"]
 
         max_bitrate = (
-            sample_rate / encoder_hop_length * num_quantizers * math.log2(codebook_size)
+            self.sample_rate
+            / self.hop_length
+            * num_quantizers
+            * math.log2(codebook_size)
         )
-        support_bitrate = [
+        support_bitrates = [
             max_bitrate * num_quant / num_quantizers / 1_000
             for num_quant in rand_num_quant
         ]
 
-        return support_bitrate
+        return support_bitrates
 
     @torch.inference_mode()
-    def resyn(
-        self, audio: torch.Tensor, sample_rate: int, bitrate: float
-    ) -> torch.Tensor:
-        # Check the sample rate and bitrate
-        assert sample_rate == self.model.model.sample_rate
-        assert bitrate in self.support_bitrate
+    def resyn(self, audio: torch.Tensor, bitrate: float) -> torch.Tensor:
+        # Check the and bitrate
+        assert bitrate in self.support_bitrates
 
         length = audio.shape[-1]
+        audio = pad_audio(audio, self.hop_length)
         code, code_emb, _, _ = self.model(
             audio, bit_width=bitrate * 1_000, run_mod="encode"
         )
@@ -78,13 +99,13 @@ class FunCodec:
 
     @torch.inference_mode()
     def extract_unit(
-        self, audio: torch.Tensor, sample_rate: int, bitrate: float
+        self, audio: torch.Tensor, bitrate: float
     ) -> tp.Tuple[torch.Tensor, tp.Tuple[torch.Tensor, int, torch.Tensor]]:
-        # Check the sample rate and bitrate
-        assert sample_rate == self.model.model.sample_rate
-        assert bitrate in self.support_bitrate
+        # Check the and bitrate
+        assert bitrate in self.support_bitrates
 
         length = audio.shape[-1]
+        audio = pad_audio(audio, self.hop_length)
         code, code_emb, _, _ = self.model(
             audio, bit_width=bitrate * 1_000, run_mod="encode"
         )

@@ -3,9 +3,12 @@
 import torch
 import encodec
 
+import math
 import typing as tp
 
-ENCODEC_MODEL_TYPE = {
+from .utils import pad_audio
+
+ENCODEC_MODEL_MAP = {
     # segment_dur=1.0, audio_normalize=True, non-causal music-only stereo model.
     "encodec_48k_24kbps": encodec.EncodecModel.encodec_model_48khz,
     # segment_dur=None, audio_normalize=False, causal audio mono model.
@@ -23,40 +26,36 @@ class EnCodec:
     """
 
     def __init__(self, model_type: str, device: str = "cpu") -> None:
-        self.model = ENCODEC_MODEL_TYPE[model_type]()
+        self.model = ENCODEC_MODEL_MAP[model_type]()
         self.model.to(device)
-        if self.model.sample_rate == 2_4000:
-            self.support_bitrate = [1.5, 3.0, 6.0, 12.0, 24.0]
-        elif self.model.sample_rate == 4_8000:
-            self.support_bitrate = [3.0, 6.0, 12.0, 24.0]
+
+        self.sample_rate = self.model.sample_rate
+        self.hop_length = math.prod(self.model.encoder.ratios)
+        self.support_bitrates = self.model.target_bandwidths
 
     @torch.inference_mode()
-    def resyn(
-        self, audio: torch.Tensor, sample_rate: int, bitrate: float
-    ) -> torch.Tensor:
-        # Check the sample rate and bitrate
-        assert sample_rate == self.model.sample_rate
-        assert bitrate in self.support_bitrate
+    def resyn(self, audio: torch.Tensor, bitrate: float) -> torch.Tensor:
+        # Check the bitrate
+        assert bitrate in self.support_bitrates
 
         length = audio.shape[-1]
-        audio = audio.unsqueeze(0)
+        audio = pad_audio(audio, self.hop_length)
         self.model.set_target_bandwidth(bitrate)
-        encoded_frames = self.model.encode(audio)
+        encoded_frames = self.model.encode(audio.unsqueeze(0))
         resyn_audio = self.model.decode(encoded_frames).squeeze(0)
         return resyn_audio[:, :length]
 
     @torch.inference_mode()
     def extract_unit(
-        self, audio: torch.Tensor, sample_rate: int, bitrate: float
+        self, audio: torch.Tensor, bitrate: float
     ) -> tp.Tuple[torch.Tensor, tp.Tuple[encodec.model.EncodedFrame, int]]:
-        # Check the sample rate and bitrate
-        assert sample_rate == self.model.sample_rate
-        assert bitrate in self.support_bitrate
+        # Check the bitrate
+        assert bitrate in self.support_bitrates
 
         length = audio.shape[-1]
-        audio = audio.unsqueeze(0)
+        audio = pad_audio(audio, self.hop_length)
         self.model.set_target_bandwidth(bitrate)
-        encoded_frames = self.model.encode(audio)
+        encoded_frames = self.model.encode(audio.unsqueeze(0))
         codes = torch.cat([encoded[0] for encoded in encoded_frames], dim=-1).squeeze(0)
         return codes.squeeze(0), (encoded_frames, length)
 

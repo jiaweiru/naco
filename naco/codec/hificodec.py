@@ -1,4 +1,3 @@
-import json
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -7,27 +6,31 @@ from torch.nn.utils import weight_norm
 
 # from librosa.util import normalize
 
+import json
+import math
+import typing as tp
 from pathlib import Path
 from urllib.request import urlretrieve
-import typing as tp
 
-HIFICODEC_MODEL_TYPE = {
-    "HiFi-Codec-16k-320d-large-universal": (
-        "HiFi-Codec-16k-320d/config_16k_320d.json",
-        "HiFi-Codec-16k-320d-large-universal",
-    ),
-    "HiFi-Codec-16k-320d": (
-        "HiFi-Codec-16k-320d/config_16k_320d.json",
-        "HiFi-Codec-16k-320d",
-    ),
-    "HiFi-Codec-24k-240d": (
-        "HiFi-Codec-24k-240d/config_24k_240d.json",
-        "HiFi-Codec-24k-240d",
-    ),
-    "HiFi-Codec-24k-320d": (
-        "HiFi-Codec-24k-320d/config_24k_320d.json",
-        "HiFi-Codec-24k-320d",
-    ),
+from .utils import pad_audio
+
+HIFICODEC_MODEL_URL = {
+    "HiFi-Codec-16k-320d-large-universal": {
+        "ckpt": "https://huggingface.co/Dongchao/AcademiCodec/resolve/main/HiFi-Codec-16k-320d-large-universal",
+        "config": "https://raw.githubusercontent.com/yangdongchao/AcademiCodec/master/egs/HiFi-Codec-16k-320d/config_16k_320d.json",
+    },
+    "HiFi-Codec-16k-320d": {
+        "ckpt": "https://huggingface.co/Dongchao/AcademiCodec/resolve/main/HiFi-Codec-16k-320d",
+        "config": "https://raw.githubusercontent.com/yangdongchao/AcademiCodec/master/egs/HiFi-Codec-16k-320d/config_16k_320d.json",
+    },
+    "HiFi-Codec-24k-240d": {
+        "ckpt": "https://huggingface.co/Dongchao/AcademiCodec/resolve/main/HiFi-Codec-24k-240d",
+        "config": "https://raw.githubusercontent.com/yangdongchao/AcademiCodec/master/egs/HiFi-Codec-24k-240d/config_24k_240d.json",
+    },
+    "HiFi-Codec-24k-320d": {
+        "ckpt": "https://huggingface.co/Dongchao/AcademiCodec/resolve/main/HiFi-Codec-24k-320d",
+        "config": "https://raw.githubusercontent.com/yangdongchao/AcademiCodec/master/egs/HiFi-Codec-24k-320d/config_24k_320d.json",
+    },
 }
 
 
@@ -41,20 +44,16 @@ class HiFiCodec:
     def __init__(self, model_type: str, device: str = "cpu") -> None:
         model_path = Path.home().joinpath(f".cache/hificodec/{model_type}")
         config_path = model_path.joinpath(
-            HIFICODEC_MODEL_TYPE[model_type][0].split("/")[-1]
+            HIFICODEC_MODEL_URL[model_type]["config"].split("/")[-1]
         )
-        ckpt_path = model_path.joinpath(HIFICODEC_MODEL_TYPE[model_type][1])
+        ckpt_path = model_path.joinpath(
+            HIFICODEC_MODEL_URL[model_type]["ckpt"].split("/")[-1]
+        )
 
         if not (config_path.exists() and ckpt_path.exists()):
             model_path.mkdir(parents=True, exist_ok=True)
-            config_url = (
-                "https://raw.githubusercontent.com/yangdongchao/AcademiCodec/master/egs/"
-                + HIFICODEC_MODEL_TYPE[model_type][0]
-            )
-            ckpt_url = (
-                "https://huggingface.co/Dongchao/AcademiCodec/resolve/main/"
-                + HIFICODEC_MODEL_TYPE[model_type][1]
-            )
+            config_url = HIFICODEC_MODEL_URL[model_type]["config"]
+            ckpt_url = HIFICODEC_MODEL_URL[model_type]["ckpt"]
             urlretrieve(config_url, config_path)
             urlretrieve(ckpt_url, ckpt_path)
 
@@ -63,17 +62,26 @@ class HiFiCodec:
         self.model.encoder.remove_weight_norm()
         self.model = self.model.to(device).eval()
 
+        self.sample_rate = self.model.h.sampling_rate
+        self.hop_length = math.prod(self.model.h.upsample_rates)
+        self.support_bitrates = self.get_audiodec_bitrates()
+
+    def get_audiodec_bitrates(self) -> tp.List[float]:
+        n_codes = self.model.h.n_codes
+        n_codebooks = self.model.h.n_code_groups * 2
+        bitrate = self.sample_rate / self.hop_length * n_codebooks * math.log2(n_codes)
+        support_bitrates = [bitrate / 1_000]
+        return support_bitrates
+
     @torch.inference_mode()
     def resyn(
         self,
         audio: torch.Tensor,
-        sample_rate: int,
         # norm_as_hificodec: bool = False
     ) -> torch.Tensor:
-        # Check the sample rate and bitrate
-        assert sample_rate == self.model.h.sampling_rate
 
         length = audio.shape[-1]
+        audio = pad_audio(audio, self.hop_length)
 
         # # https://github.com/yangdongchao/AcademiCodec/blob/master/egs/HiFi-Codec-24k-320d/infer.ipynb
         # if norm_as_hificodec:
@@ -90,13 +98,11 @@ class HiFiCodec:
     def extract_unit(
         self,
         audio: torch.Tensor,
-        sample_rate: int,
         # norm_as_hificodec: bool = False
     ) -> tp.Tuple[torch.Tensor, tp.Tuple[torch.Tensor, int]]:
-        # Check the sample rate and bitrate
-        assert sample_rate == self.model.h.sampling_rate
 
         length = audio.shape[-1]
+        audio = pad_audio(audio, self.hop_length)
 
         # if norm_as_hificodec:
         #     audio = torch.tensor(
@@ -115,6 +121,7 @@ class HiFiCodec:
 
 
 # Academic Codec (HiFi Codec) Model
+
 LRELU_SLOPE = 0.1
 
 
