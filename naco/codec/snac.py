@@ -23,16 +23,19 @@ class SNAC:
         self.model = self.model.to(device).eval()
 
         self.sample_rate = self.model.sampling_rate
-        # The pad also depends on the parameters of quantization and local attention.
-        self.hop_length = self.model.hop_length
+        self.support_bitrates = self.get_snac_bitrates()
 
     def get_snac_bitrates(self):
         support_bitrates = [
-            self.sample_rate
-            / self.hop_length
-            / max(self.model.vq_strides)
-            * sum(self.model.vq_strides)
-            * math.log2(self.model.codebook_size)
+            round(
+                self.sample_rate
+                / self.model.hop_length
+                / max(self.model.vq_strides)
+                * sum(self.model.vq_strides)
+                * math.log2(self.model.codebook_size)
+                / 1_000,
+                1,
+            )
         ]
         return support_bitrates
 

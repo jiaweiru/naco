@@ -1,3 +1,10 @@
+from .audiodec import AudioDEC
+from .dac import DAC
+from .encodec import EnCodec
+from .funcodec import FunCodec
+from .hificodec import HiFiCodec
+from .snac import SNAC
+
 CODEC_ZOO = {
     "audio_dec": [
         "AudioDec_v1_symAD_vctk_48000_hop300_clean",
@@ -21,10 +28,10 @@ CODEC_ZOO = {
         "funcodec_zh_en_general_16k_nq32ds640",
     ],
     "hificodec": [
-        "HiFi-Codec-16k-320d-large-universal",  # 2kbps
-        "HiFi-Codec-16k-320d",  # 2kbps
-        "HiFi-Codec-24k-240d",  # 2kbps
-        "HiFi-Codec-24k-320d",  # 3kbps
+        "HiFi-Codec-16k-320d-large-universal",
+        "HiFi-Codec-16k-320d",
+        "HiFi-Codec-24k-240d",
+        "HiFi-Codec-24k-320d",
     ],
     "snac": [
         "snac_24khz_0.98kbps",

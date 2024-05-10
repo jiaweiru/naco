@@ -1,15 +1,16 @@
 # Warning: An import error occurs when using the current script as the main program.
 # Because the filename is the same as the package "dac".
+import math
+import typing as tp
+
 import torch
 import dac
 from audiotools import AudioSignal
 
-import math
-import typing as tp
 
 DAC_MODEL_MAP = {
-    "dac_16k_8kbps": ("16khz", "8kbps"),
-    "dac_24k_8kbps": ("24khz", "8kbps"),
+    "dac_16k_6kbps": ("16khz",),
+    "dac_24k_24kbps": ("24khz",),
     "dac_44k_8kbps": ("44khz", "8kbps"),
     "dac_44k_16kbps": ("44khz", "16kbps"),
 }
@@ -31,41 +32,51 @@ class DAC:
         self.model.to(device).eval()
 
         self.sample_rate = self.model.sample_rate
-        self.hop_length = self.model.hop_length
-        self.support_bitrate = self.get_dac_bitrates()
+        self.support_bitrates = self.get_dac_bitrates()
+        self.support_quantizers = list(range(1, self.model.n_codebooks + 1))
 
     def get_dac_bitrates(self):
         n_codebooks = self.model.n_codebooks
         codebook_size = self.model.codebook_size
+        hop_length = self.model.hop_length
         max_bitrate = (
-            self.sample_rate / self.hop_length * n_codebooks * math.log2(codebook_size)
+            self.sample_rate / hop_length * n_codebooks * math.log2(codebook_size)
         )
         support_bitrates = [
-            round(max_bitrate * i / n_codebooks / 1_000, 2) for i in range(n_codebooks)
+            round(max_bitrate * i / n_codebooks / 1_000, 1)
+            for i in range(1, n_codebooks + 1)
         ]
 
         return support_bitrates
 
     @torch.inference_mode()
-    def resyn(self, audio: torch.Tensor) -> torch.Tensor:
+    def resyn(
+        self, audio: torch.Tensor, n_quantizers: tp.Optional[int] = None
+    ) -> torch.Tensor:
         """The DAC currently only supports encoding using all quantizers,
         in fact it supports encoding at any bitrate from 0 to the total number of quantizers
         """
+        if n_quantizers is None:
+            n_quantizers = self.support_quantizers[-1]
+        assert n_quantizers in self.support_quantizers
         # Check the sample rate and padding
         padded_audio = self.model.preprocess(audio.unsqueeze(0), self.sample_rate)
         length = audio.shape[-1]
-        zq, _, _, _, _ = self.model.encode(padded_audio)
+        zq, _, _, _, _ = self.model.encode(padded_audio, n_quantizers)
         resyn_audio = self.model.decode(zq)
         return resyn_audio.squeeze(0)[:, :length]
 
     @torch.inference_mode()
     def extract_unit(
-        self, audio: torch.Tensor
+        self, audio: torch.Tensor, n_quantizers: tp.Optional[int] = None
     ) -> tp.Tuple[torch.Tensor, tp.Tuple[torch.Tensor, int]]:
+        if n_quantizers is None:
+            n_quantizers = self.support_quantizers[-1]
+        assert n_quantizers in self.support_quantizers
         # Check the sample rate and padding
         padded_audio = self.model.preprocess(audio.unsqueeze(0), self.sample_rate)
         length = audio.shape[-1]
-        zq, codes, _, _, _ = self.model.encode(padded_audio)
+        zq, codes, _, _, _ = self.model.encode(padded_audio, n_quantizers)
         return codes.squeeze(0), (zq, length)
 
     @torch.inference_mode()
@@ -76,22 +87,33 @@ class DAC:
 
     @torch.inference_mode()
     def resyn_norm_chunked(
-        self, audio: torch.Tensor, win_duration: float = 15.0
+        self,
+        audio: torch.Tensor,
+        n_quantizers: tp.Optional[int] = None,
+        win_duration: float = 15.0,
     ) -> torch.Tensor:
         """Avoid OOM by using the official chunking method for long audio."""
+        if n_quantizers is None:
+            n_quantizers = self.support_quantizers[-1]
+        assert n_quantizers in self.support_quantizers
         audio = AudioSignal(audio.squeeze(0), self.sample_rate)
-        audio_dac = self.model.compress(audio, win_duration)
+        audio_dac = self.model.compress(audio, win_duration, n_quantizers=n_quantizers)
         resyn_audio = self.model.decompress(audio_dac).audio_data
         return resyn_audio.squeeze(0)
 
     @torch.inference_mode()
     def extract_unit_norm_chunked(
-        self, audio: torch.Tensor, win_duration: float = 15.0
+        self,
+        audio: torch.Tensor,
+        n_quantizers: tp.Optional[int] = None,
+        win_duration: float = 15.0,
     ) -> tp.Tuple[torch.Tensor, dac.DACFile]:
+        if n_quantizers is None:
+            n_quantizers = self.support_quantizers[-1]
+        assert n_quantizers in self.support_quantizers
         # Get the DACFile object from audio
         audio = AudioSignal(audio.squeeze(0), self.sample_rate)
-        audio_dac = self.model.compress(audio, win_duration)
-
+        audio_dac = self.model.compress(audio, win_duration, n_quantizers=n_quantizers)
         codes = audio_dac.codes.squeeze(0)
         return codes, audio_dac
 

@@ -62,34 +62,32 @@ class FunCodec:
         self.model = Speech2Token(config_path, ckpt_path, device=device)
 
         self.sample_rate = self.model.model.sample_rate
-        self.hop_length = self.model.model_args.quantizer_conf["encoder_hop_length"]
         self.support_bitrates = self.get_funcodec_bitrates()
 
     def get_funcodec_bitrates(self) -> tp.List[float]:
         codebook_size = self.model.model_args.quantizer_conf["codebook_size"]
         num_quantizers = self.model.model_args.quantizer_conf["num_quantizers"]
         rand_num_quant = self.model.model_args.quantizer_conf["rand_num_quant"]
-
+        hop_length = self.model.model_args.quantizer_conf["encoder_hop_length"]
         max_bitrate = (
-            self.sample_rate
-            / self.hop_length
-            * num_quantizers
-            * math.log2(codebook_size)
+            self.sample_rate / hop_length * num_quantizers * math.log2(codebook_size)
         )
         support_bitrates = [
-            max_bitrate * num_quant / num_quantizers / 1_000
+            round(max_bitrate * num_quant / num_quantizers / 1_000, 1)
             for num_quant in rand_num_quant
         ]
-
         return support_bitrates
 
     @torch.inference_mode()
-    def resyn(self, audio: torch.Tensor, bitrate: float) -> torch.Tensor:
-        # Check the and bitrate
+    def resyn(
+        self, audio: torch.Tensor, bitrate: tp.Optional[float] = None
+    ) -> torch.Tensor:
+        if bitrate is None:
+            bitrate = self.support_bitrates[-1]
         assert bitrate in self.support_bitrates
-
         length = audio.shape[-1]
-        audio = pad_audio(audio, self.hop_length)
+        hop_length = self.model.model_args.quantizer_conf["encoder_hop_length"]
+        audio = pad_audio(audio, hop_length)
         code, code_emb, _, _ = self.model(
             audio, bit_width=bitrate * 1_000, run_mod="encode"
         )
@@ -99,13 +97,14 @@ class FunCodec:
 
     @torch.inference_mode()
     def extract_unit(
-        self, audio: torch.Tensor, bitrate: float
+        self, audio: torch.Tensor, bitrate: tp.Optional[float] = None
     ) -> tp.Tuple[torch.Tensor, tp.Tuple[torch.Tensor, int, torch.Tensor]]:
-        # Check the and bitrate
+        if bitrate is None:
+            bitrate = self.support_bitrates[-1]
         assert bitrate in self.support_bitrates
-
         length = audio.shape[-1]
-        audio = pad_audio(audio, self.hop_length)
+        hop_length = self.model.model_args.quantizer_conf["encoder_hop_length"]
+        audio = pad_audio(audio, hop_length)
         code, code_emb, _, _ = self.model(
             audio, bit_width=bitrate * 1_000, run_mod="encode"
         )

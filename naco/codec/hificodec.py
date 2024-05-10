@@ -63,14 +63,14 @@ class HiFiCodec:
         self.model = self.model.to(device).eval()
 
         self.sample_rate = self.model.h.sampling_rate
-        self.hop_length = math.prod(self.model.h.upsample_rates)
         self.support_bitrates = self.get_audiodec_bitrates()
 
     def get_audiodec_bitrates(self) -> tp.List[float]:
         n_codes = self.model.h.n_codes
         n_codebooks = self.model.h.n_code_groups * 2
-        bitrate = self.sample_rate / self.hop_length * n_codebooks * math.log2(n_codes)
-        support_bitrates = [bitrate / 1_000]
+        hop_length = math.prod(self.model.h.upsample_rates)
+        bitrate = self.sample_rate / hop_length * n_codebooks * math.log2(n_codes)
+        support_bitrates = [round(bitrate / 1_000, 1)]
         return support_bitrates
 
     @torch.inference_mode()
@@ -81,7 +81,8 @@ class HiFiCodec:
     ) -> torch.Tensor:
 
         length = audio.shape[-1]
-        audio = pad_audio(audio, self.hop_length)
+        hop_length = math.prod(self.model.h.upsample_rates)
+        audio = pad_audio(audio, hop_length)
 
         # # https://github.com/yangdongchao/AcademiCodec/blob/master/egs/HiFi-Codec-24k-320d/infer.ipynb
         # if norm_as_hificodec:
@@ -102,7 +103,8 @@ class HiFiCodec:
     ) -> tp.Tuple[torch.Tensor, tp.Tuple[torch.Tensor, int]]:
 
         length = audio.shape[-1]
-        audio = pad_audio(audio, self.hop_length)
+        hop_length = math.prod(self.model.h.upsample_rates)
+        audio = pad_audio(audio, hop_length)
 
         # if norm_as_hificodec:
         #     audio = torch.tensor(

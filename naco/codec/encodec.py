@@ -1,10 +1,10 @@
 # Warning: An import error occurs when using the current script as the main program.
 # Because the filename is the same as the package "encodec".
-import torch
-import encodec
-
 import math
 import typing as tp
+
+import torch
+import encodec
 
 from .utils import pad_audio
 
@@ -30,16 +30,19 @@ class EnCodec:
         self.model.to(device)
 
         self.sample_rate = self.model.sample_rate
-        self.hop_length = math.prod(self.model.encoder.ratios)
         self.support_bitrates = self.model.target_bandwidths
+        self.channels = self.model.channels
 
     @torch.inference_mode()
-    def resyn(self, audio: torch.Tensor, bitrate: float) -> torch.Tensor:
-        # Check the bitrate
+    def resyn(
+        self, audio: torch.Tensor, bitrate: tp.Optional[float] = None
+    ) -> torch.Tensor:
+        if bitrate is None:
+            bitrate = self.support_bitrates[-1]
         assert bitrate in self.support_bitrates
-
         length = audio.shape[-1]
-        audio = pad_audio(audio, self.hop_length)
+        hop_length = math.prod(self.model.encoder.ratios)
+        audio = pad_audio(audio, hop_length)
         self.model.set_target_bandwidth(bitrate)
         encoded_frames = self.model.encode(audio.unsqueeze(0))
         resyn_audio = self.model.decode(encoded_frames).squeeze(0)
@@ -47,13 +50,14 @@ class EnCodec:
 
     @torch.inference_mode()
     def extract_unit(
-        self, audio: torch.Tensor, bitrate: float
+        self, audio: torch.Tensor, bitrate: tp.Optional[float] = None
     ) -> tp.Tuple[torch.Tensor, tp.Tuple[encodec.model.EncodedFrame, int]]:
-        # Check the bitrate
+        if bitrate is None:
+            bitrate = self.support_bitrates[-1]
         assert bitrate in self.support_bitrates
-
         length = audio.shape[-1]
-        audio = pad_audio(audio, self.hop_length)
+        hop_length = math.prod(self.model.encoder.ratios)
+        audio = pad_audio(audio, hop_length)
         self.model.set_target_bandwidth(bitrate)
         encoded_frames = self.model.encode(audio.unsqueeze(0))
         codes = torch.cat([encoded[0] for encoded in encoded_frames], dim=-1).squeeze(0)
