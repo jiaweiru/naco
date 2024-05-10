@@ -12,6 +12,8 @@ The aim of NACO is to build a framework for training as well as inference of neu
 
 ## Other pre-trained codecs usage
 
+![](https://typora-pic-1306146530.cos.ap-beijing.myqcloud.com/img/实验记录_开源神经编解码器对比.png)
+
 Install it using:
 
 ```bash
