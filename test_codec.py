@@ -40,7 +40,6 @@ def test_dac(mode, device):
 
 
 def test_encodec(device):
-
     model_types = ["encodec_24k_24kbps", "encodec_48k_24kbps"]
     for model_type in model_types:
         codec = encodec.EnCodec(model_type, device)
